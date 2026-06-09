@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YT Spoilerless</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f0f0f;
+      color: #e0e0e0;
+      font-family: system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1rem;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 600;
+      margin-bottom: 1.5rem;
+      letter-spacing: -0.01em;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 0.5rem;
+      width: 100%;
+      max-width: 640px;
+      margin-bottom: 1.5rem;
+    }
+
+    input[type="text"] {
+      flex: 1;
+      padding: 0.6rem 0.9rem;
+      border-radius: 6px;
+      border: 1px solid #333;
+      background: #1a1a1a;
+      color: #e0e0e0;
+      font-size: 0.95rem;
+      outline: none;
+    }
+
+    input[type="text"]:focus { border-color: #555; }
+
+    button {
+      padding: 0.6rem 1.1rem;
+      border-radius: 6px;
+      border: none;
+      background: #ff0000;
+      color: #fff;
+      font-size: 0.95rem;
+      cursor: pointer;
+    }
+
+    button:hover { background: #cc0000; }
+
+    /* Player wrapper — position:relative lets us stack the overlay */
+    .player-wrapper {
+      position: relative;
+      width: 100%;
+      max-width: 640px;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+      display: none;
+    }
+
+    .player-wrapper.visible { display: block; }
+
+    #player {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      /* Push the iframe up so the bottom control bar scrolls out of view.
+         YouTube's control bar is ~40px; we extend height and crop with overflow:hidden. */
+    }
+
+    /* Transparent overlay that intercepts mouse events so the user never
+       accidentally clicks the progress bar or volume controls. */
+    .overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 10;
+      cursor: pointer;
+    }
+
+    /* Minimal custom play/pause indicator */
+    .play-hint {
+      position: absolute;
+      bottom: 0.75rem;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.55);
+      color: #fff;
+      font-size: 0.75rem;
+      padding: 0.25rem 0.6rem;
+      border-radius: 4px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .play-hint.show { opacity: 1; }
+
+    #error-msg {
+      color: #f87171;
+      font-size: 0.85rem;
+      margin-top: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>YT Spoilerless</h1>
+
+  <div class="input-row">
+    <input type="text" id="url-input" placeholder="Paste YouTube URL or video ID…" />
+    <button id="load-btn">Load</button>
+  </div>
+
+  <p id="error-msg"></p>
+
+  <div class="player-wrapper" id="player-wrapper">
+    <div id="player"></div>
+    <div class="overlay" id="overlay"></div>
+    <span class="play-hint" id="play-hint">click to play / pause</span>
+  </div>
+
+  <script>
+    // ── YouTube IFrame API bootstrap ──────────────────────────────────────────
+    let player = null;
+    let playerReady = false;
+
+    window.onYouTubeIframeAPIReady = function () {
+      // Called by the API script once loaded; actual player created on demand.
+    };
+
+    (function loadAPI() {
+      const tag = document.createElement('script');
+      tag.src = 'https://www.youtube.com/iframe_api';
+      document.head.appendChild(tag);
+    })();
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    function extractVideoId(raw) {
+      raw = raw.trim();
+      // Already an 11-char ID
+      if (/^[A-Za-z0-9_-]{11}$/.test(raw)) return raw;
+      try {
+        const url = new URL(raw.startsWith('http') ? raw : 'https://' + raw);
+        if (url.hostname === 'youtu.be') return url.pathname.slice(1).split('?')[0];
+        return url.searchParams.get('v');
+      } catch {
+        return null;
+      }
+    }
+
+    function createPlayer(videoId) {
+      const wrapper = document.getElementById('player-wrapper');
+      wrapper.classList.add('visible');
+      document.getElementById('error-msg').textContent = '';
+
+      if (player) {
+        player.loadVideoById(videoId);
+        return;
+      }
+
+      player = new YT.Player('player', {
+        videoId,
+        playerVars: {
+          controls:        0,  // hide native controls (progress bar, duration, buttons)
+          rel:             0,  // no related videos
+          modestbranding:  1,  // minimal YouTube branding
+          disablekb:       1,  // disable keyboard shortcuts so arrow keys can't seek
+          fs:              0,  // hide fullscreen button
+          iv_load_policy:  3,  // hide video annotations
+          playsinline:     1,
+          enablejsapi:     1,
+        },
+        events: {
+          onReady() { playerReady = true; },
+        },
+      });
+    }
+
+    // ── Overlay click → play / pause ──────────────────────────────────────────
+    document.getElementById('overlay').addEventListener('click', () => {
+      if (!player || !playerReady) return;
+      const state = player.getPlayerState();
+      const hint = document.getElementById('play-hint');
+
+      if (state === YT.PlayerState.PLAYING) {
+        player.pauseVideo();
+        hint.textContent = '⏸ paused';
+      } else {
+        player.playVideo();
+        hint.textContent = '▶ playing';
+      }
+
+      hint.classList.add('show');
+      setTimeout(() => hint.classList.remove('show'), 1200);
+    });
+
+    // ── Load button ───────────────────────────────────────────────────────────
+    document.getElementById('load-btn').addEventListener('click', () => {
+      const raw = document.getElementById('url-input').value;
+      const id = extractVideoId(raw);
+      if (!id) {
+        document.getElementById('error-msg').textContent = 'Could not find a video ID in that URL.';
+        return;
+      }
+      createPlayer(id);
+    });
+
+    document.getElementById('url-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('load-btn').click();
+    });
+  </script>
+</body>
+</html>
